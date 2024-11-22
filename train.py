@@ -117,12 +117,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss_sds = train_step(inpaint_image, mask_image, prompt, negative_prompt)
 
         # Loss
-        masked_image = gt_image * (1-mask_image)
-        Ll1 = l1_loss(image, gt_image)
-        if FUSED_SSIM_AVAILABLE:
-            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-        else:
-            ssim_value = ssim(image, gt_image)
+        masked_image_loss = gt_image * (1-mask_image)
+        image_loss = image * (1-mask_image)
+        Ll1 = l1_loss(image_loss, masked_image_loss)
+        
+        ssim_value = fused_ssim(image_loss.unsqueeze(0), masked_image_loss.unsqueeze(0))
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
@@ -141,7 +140,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             Ll1depth = 0
             
         loss = loss + loss_sds
-
+        
         loss.backward()
 
         iter_end.record()
