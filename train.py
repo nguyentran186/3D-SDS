@@ -13,7 +13,7 @@ import os
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
-from gaussian_renderer import render, network_gui
+from gaussian_renderer import render
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
@@ -45,7 +45,7 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
     
-prompt = 'Fit the background'
+prompt = 'Inpaint a dog and fit surrounding background'
 negative_prompt = 'unrealistic, blurry, low quality, out of focus, ugly, low contrast, dull, dark, low-resolution, oversaturation.'
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
@@ -112,34 +112,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             temp = to_pil(image)
             temp.save("temp.png")
 
-        loss = train_step(inpaint_image, mask_image, prompt, negative_prompt)
-        
-        # if viewpoint_cam.alpha_mask is not None:
-        #     alpha_mask = viewpoint_cam.alpha_mask.cuda()
-        #     image *= alpha_mask
+        loss_sds = train_step(inpaint_image, mask_image, prompt, negative_prompt)
 
-        # # Loss
-        # Ll1 = l1_loss(image, gt_image)
-        # if FUSED_SSIM_AVAILABLE:
-        #     ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-        # else:
-        #     ssim_value = ssim(image, gt_image)
+        # Loss
+        masked_image = gt_image * (1-mask_image)
+        Ll1 = l1_loss(image, gt_image)
+        if FUSED_SSIM_AVAILABLE:
+            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+        else:
+            ssim_value = ssim(image, gt_image)
 
-        # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
-        # # Depth regularization
-        # Ll1depth_pure = 0.0
-        # if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
-        #     invDepth = render_pkg["depth"]
-        #     mono_invdepth = viewpoint_cam.invdepthmap.cuda()
-        #     depth_mask = viewpoint_cam.depth_mask.cuda()
+        # Depth regularization
+        Ll1depth_pure = 0.0
+        if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
+            invDepth = render_pkg["depth"]
+            mono_invdepth = viewpoint_cam.invdepthmap.cuda()
+            depth_mask = viewpoint_cam.depth_mask.cuda()
 
-        #     Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
-        #     Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure 
-        #     loss += Ll1depth
-        #     Ll1depth = Ll1depth.item()
-        # else:
-        #     Ll1depth = 0
+            Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
+            Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure 
+            loss += Ll1depth
+            Ll1depth = Ll1depth.item()
+        else:
+            Ll1depth = 0
+            
+        loss = loss + loss_sds
 
         loss.backward()
 
@@ -278,8 +277,6 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    if not args.disable_viewer:
-        network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
