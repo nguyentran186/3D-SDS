@@ -29,7 +29,6 @@ def train_step(image, mask_image, prompt, negative_prompt,
                num_inference_steps=3, strength=0.8, num_images_per_prompt=1,
                masked_image_latents=None, eta=0.0, guidance_scale = 7.5,):
     generator = torch.Generator(device)
-    alphas = pipe.scheduler.alphas_cumprod.to(device)
     
     height = pipe.unet.config.sample_size * pipe.vae_scale_factor
     width = pipe.unet.config.sample_size * pipe.vae_scale_factor
@@ -134,6 +133,9 @@ def train_step(image, mask_image, prompt, negative_prompt,
     extra_step_kwargs = pipe.prepare_extra_step_kwargs(generator, eta)
     num_warmup_steps = len(timesteps) - num_inference_steps * pipe.scheduler.order
     
+    
+    loss = 0
+    
     # with torch.no_grad():
     for i, t in enumerate(timesteps[:-1]):
         # expand the latents if we are doing classifier free guidance
@@ -160,19 +162,15 @@ def train_step(image, mask_image, prompt, negative_prompt,
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-        # compute the previous noisy sample x_t -> x_t-1
-        # latents = pipe.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+        # breakpoint()
+        alphas = pipe.scheduler.alphas_cumprod.to(device)
+        # alphas = pipe.scheduler.alphas.to(device)
+        w = lambda alphas: (((1 - alphas) / alphas) ** 0.5) 
+        grad = w(alphas[t]) * (noise_pred - noise)
+    
+        loss += SpecifyGradient.apply(latents, grad)
         
-    # image = pipe.vae.decode(latents / pipe.vae.config.scaling_factor, return_dict=False)[0]
-    # image = image.detach()
-    
-    # do_denormalize = [True] * image.shape[0]
-    # image = pipe.image_processor.postprocess(image, output_type='pil', do_denormalize=do_denormalize)
-    # image[0].save(f"sdout/sdout{i}.png")
-    
-    w = lambda alphas: (((1 - alphas) / alphas) ** 0.5) 
-    grad = w(alphas[t]) * (noise_pred - noise)
-    
-    loss = SpecifyGradient.apply(latents, grad)
+        # compute the previous noisy sample x_t -> x_t-1
+        latents = pipe.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
     
     return loss
